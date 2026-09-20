@@ -1,0 +1,49 @@
+name: Build Telegram
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Install SDK packages
+        run: |
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;27.2.12479018" "cmake;3.22.1"
+      - name: Set API keys
+        env:
+          APP_ID: ${{ secrets.TG_APP_ID }}
+          APP_HASH: ${{ secrets.TG_APP_HASH }}
+        run: |
+          if [ -n "$APP_ID" ] && [ -n "$APP_HASH" ]; then
+            F=TMessagesProj/src/main/java/org/telegram/messenger/BuildVars.java
+            sed -i -E "s/(APP_ID *= *)[0-9]+/\1$APP_ID/; s/(APP_HASH *= *)\"[0-9a-fA-F]*\"/\1\"$APP_HASH\"/" $F
+            grep -c "APP_ID = $APP_ID" $F
+          else
+            echo "No secrets set, using default keys"
+          fi
+      - name: Limit to arm64
+        run: sed -i 's/abiFilters "armeabi-v7a", "arm64-v8a", "x86", "x86_64"/abiFilters "arm64-v8a"/' TMessagesProj_App/build.gradle
+      - name: Build
+        run: |
+          chmod +x gradlew
+          ./gradlew :TMessagesProj_App:assembleAfatDebug --no-daemon
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp TMessagesProj_App/build/outputs/apk/afat/debug/app.apk TelegramTest.apk
+          gh release delete latest --yes --cleanup-tag || true
+          gh release create latest TelegramTest.apk --title "Telegram test build" --notes "Build ${{ github.sha }}"
